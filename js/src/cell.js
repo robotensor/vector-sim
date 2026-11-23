@@ -2,6 +2,16 @@ import { fnv64 } from './hash.js';
 
 const STATE = 'mjSTATE_INTEGRATION';
 
+export function yawCosSin(c) {
+  const q = c.quat;
+  if (Array.isArray(q) && q.length === 4 && q.every(Number.isFinite) && q[1] === 0 && q[2] === 0) {
+    const n = q[0] * q[0] + q[3] * q[3];
+    if (n > 0.5 && n < 2) return [(q[0] * q[0] - q[3] * q[3]) / n, (2 * q[0] * q[3]) / n];
+  }
+  if (!c.yaw) return [1, 0];
+  return [Math.cos(c.yaw), Math.sin(c.yaw)];
+}
+
 export class Cell {
   constructor(mj, model, scene) {
     this.mj = mj;
@@ -36,7 +46,8 @@ export class Cell {
       this.crate = { kind: 'pile', x: (T.x[0] + T.x[1]) / 2, y: (T.y[0] + T.y[1]) / 2, cos: 1, sin: 0,
                      ix: (T.x[1] - T.x[0]) / 2, iy: (T.y[1] - T.y[0]) / 2, floor: c.floor_z, rim: c.rim_z };
     } else {
-      this.crate = { kind: 'bin', x: c.pos[0], y: c.pos[1], cos: Math.cos(c.yaw), sin: Math.sin(c.yaw),
+      const [cs, sn] = yawCosSin(c);
+      this.crate = { kind: 'bin', x: c.pos[0], y: c.pos[1], cos: cs, sin: sn,
                      ix: c.inner_half[0], iy: c.inner_half[1], floor: c.floor_z, rim: c.rim_z };
     }
     this.ticks = 0;
