@@ -1,5 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import load from '@mujoco/mujoco';
 
 let _mj = null;
@@ -26,4 +29,20 @@ export function inside(root, p) {
   const full = path.resolve(root, p);
   if (!full.startsWith(root + path.sep)) throw bad();
   return full;
+}
+
+export const PIN_FILES = ['actions.js', 'cell.js', 'episode.js', 'hash.js', 'rules.js'];
+
+let _pin = null;
+export function simPin() {
+  if (_pin) return _pin;
+  const src = path.dirname(fileURLToPath(import.meta.url));
+  const code = crypto.createHash('sha256');
+  for (const f of PIN_FILES) code.update(`${f}\0`).update(fs.readFileSync(path.join(src, f))).update('\0');
+  const req = createRequire(import.meta.url);
+  const wasmPath = req.resolve('@mujoco/mujoco/mujoco.wasm'), pkgDir = path.dirname(wasmPath);
+  const wasm = crypto.createHash('sha256').update(fs.readFileSync(wasmPath)).digest('hex');
+  const sim = JSON.parse(fs.readFileSync(path.join(src, '..', 'package.json'), 'utf8')).version;
+  const mujoco = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version;
+  return (_pin = { sim, code: code.digest('hex'), mujoco, wasm });
 }
