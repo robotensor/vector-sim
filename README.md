@@ -124,6 +124,33 @@ the outcomes. With the default rules:
 | `missed` | the try ran out after closing on nothing and never holding a part, or the expert gave up |
 | `timed_out` | `try_s` passed (the start message's `limits.time_limit_s`, 15 s) without another verdict |
 
+### Action logs
+
+A person's or an expert's try is a list of rows; `js/src/actions.js` is the one format both are logged, hashed and
+replayed in (`vector-actions/1`). The browser console, the vector-env verifier and experts use the same code.
+
+| export | use |
+|---|---|
+| `rowsHash(rows)`, `RowsHash` | FNV-1a 64 over every value as float64 little-endian (`-0` as `0`), 16 hex: the harness `action_hash`; `new RowsHash().rows(row)` adds rows as they come |
+| `encodeRows(rows)`, `decodeRows(b64)`, `flatRows(rows)` | rows as base64 of float64, back, and a checked flat `Float64Array` (whole rows, finite) |
+| `chainSeed(nonce, session, sceneId)`, `chainNext(prev, k, a, b, sh, flat)` | the console's running hash chain over log batches (`vector-console/1`) |
+| `replayRows(cell, { checkpoint, target }, rows, { every, hold, limit })` | restore the checkpoint, run a try on `target` with the rows; `marks` = `[tick, cell.hash()]` every `every` ticks; `hold` keeps the last row until the verdict (expert semantics), else the result says how many rows came after the verdict (`extra`) or that there was none (`outcome: null`) |
+| `probeRows(ctrl, ticks)`, `probe(cell, checkpoint, { ticks, every })` | a fixed 40-tick motion from the checkpoint and its hashes every 5 ticks, then the checkpoint again: the startup self-test that a runtime steps like the server |
+| `yawCosSin(crate)` | the bin's yaw cosine and sine from its quaternion with exact arithmetic (no `Math.cos`), so every JavaScript engine computes the same rules |
+
+```mermaid
+flowchart LR
+  K["keys or a plan"] --> ROWS["rows [q1..q6, grip]"]
+  ROWS --> H["rowsHash = action_hash"]
+  ROWS --> C["chainNext per batch"]
+  ROWS --> RP["replayRows: verdict, marks, final hash"]
+  RP --> CMP{"marks and final hash equal the claim"}
+```
+
+`simPin()` (`node.js`) is `{sim, code, mujoco, wasm}`: the version, the sha256 of `actions.js, cell.js, episode.js,
+hash.js, rules.js` (`name\0content\0` each), the MuJoCo version and the sha256 of the `mujoco.wasm` it loads. Two
+runtimes with the same pin step the same rows to the same states; the console refuses to play on another pin.
+
 ### Other exports
 
 | export | use |
@@ -134,6 +161,9 @@ the outcomes. With the default rules:
 | `replay(cell, log)`, `replayUnit(cell, …)` | re-simulate an episode log, or one unit of it, and check every hash |
 | `fillPlan`, `LOG_FORMAT` | the scene fill schedule; `vector-episode/2` |
 | `fnv64`, `f64ToB64`, `b64ToF64`, `b64encode`, `b64decode` | the hash and encodings used in logs and messages |
+
+The build is the single-thread `@mujoco/mujoco` (`mujoco.wasm`, not `mt/`): no threads, the same bytes in Node and
+in browsers.
 
 ## Versions
 
