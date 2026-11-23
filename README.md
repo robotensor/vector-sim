@@ -39,6 +39,10 @@ The tests and `bin/verify*.mjs` need the asset bundle and find it the way vector
    `vector-env assets pull` fills; `<version>` is `VECTOR_ENV_ASSETS_VERSION` or `assets.version` in
    `<vector-env>/vector_env/env.yaml`.
 
+`bundleFiles(dir, scene)` reads the meshes a scene names (`meta.files`, else the xml's `file=`) and refuses any
+path that is absolute, has `.`/`..`/empty segments or a backslash, or resolves outside the bundle folder (links
+the bundle folder itself holds are followed: they are the operator's, not the scene's).
+
 So after `vector-env assets pull` in a vector-env beside this folder, `npm test` needs nothing else. With no bundle
 the tests are skipped and say why. The tests run on the fixture scenes in `js/test/fixtures/`; their part meshes are
 found in the bundle by content hash.
