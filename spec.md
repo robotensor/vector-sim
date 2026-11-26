@@ -20,6 +20,8 @@ skill, except the compatibility entries of `js/package.json` (section 2).
 
 ## 2. Package
 
+The compatibility entries of `exports` (the old specifiers) are temporary. They stay through round `bin-picking-expert-r2` and are removed in the first change after that tag.
+
 `js/package.json` keeps `name` (`@vector/sim`), `version`, `type` (`module`), `engines`, `dependencies` and
 `license`. It sets:
 
