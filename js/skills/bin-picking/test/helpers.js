@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { findBundle, MISSING } from '../src/bundle.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const ROOT = path.resolve(HERE, '..', '..');
+export const ROOT = path.resolve(HERE, '..', '..', '..', '..');
 export const ASSETS = findBundle();
 export const SKIP = ASSETS ? false : MISSING;
 const FIXTURES = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'scenes.json'), 'utf8'));

@@ -13,15 +13,18 @@ const expand = (p) => path.resolve(p.startsWith('~/') ? path.join(os.homedir(), 
 const isBundle = (d) => fs.existsSync(path.join(d, 'manifest.json'));
 
 export function envDir() {
-  return expand(process.env.VECTOR_ENV_DIR || path.resolve(HERE, '..', '..', '..', 'vector-env'));
+  return expand(process.env.VECTOR_ENV_DIR || path.resolve(HERE, '..', '..', '..', '..', '..', 'vector-env'));
 }
 
 export function pinnedVersion(dir = envDir()) {
   if (process.env.VECTOR_ENV_ASSETS_VERSION) return process.env.VECTOR_ENV_ASSETS_VERSION;
-  let text;
-  try { text = fs.readFileSync(path.join(dir, 'vector_env', 'env.yaml'), 'utf8'); } catch { return null; }
-  const m = /^assets:[ \t]*\r?\n(?:[ \t]+.*\r?\n)*?[ \t]+version:[ \t]*["']?([^"'\s#]+)/m.exec(text);
-  return m ? m[1] : null;
+  for (const f of [['vector_env', 'skills', 'bin_picking', 'env.yaml'], ['vector_env', 'env.yaml']]) {
+    let text;
+    try { text = fs.readFileSync(path.join(dir, ...f), 'utf8'); } catch { continue; }
+    const m = /^assets:[ \t]*\r?\n(?:[ \t]+.*\r?\n)*?[ \t]+version:[ \t]*["']?([^"'\s#]+)/m.exec(text);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 export function findBundle() {

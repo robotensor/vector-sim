@@ -1,22 +1,23 @@
 {
   "name": "@vector/sim",
   "version": "0.1.0",
-  "description": "The Vector bin cell engine: MuJoCo (WebAssembly) cell, pick rules, depth camera, episode log, replay and IK. The same code runs in the browser, in the environment and in experts.",
+  "description": "The simulator of each Vector skill. Browsers, the environment and experts run the same code.",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "exports": {
-    ".": "./src/index.js",
-    "./testing": "./test/helpers.js",
-    "./*": "./src/*"
+    ".": "./skills/bin-picking/src/index.js",
+    "./testing": "./skills/bin-picking/test/helpers.js",
+    "./skills/*": "./skills/*",
+    "./*": "./skills/bin-picking/src/*"
   },
   "bin": {
-    "vector-verify": "./bin/verify.mjs",
-    "vector-verify-unit": "./bin/verify_unit.mjs"
+    "vector-verify": "./skills/bin-picking/bin/verify.mjs",
+    "vector-verify-unit": "./skills/bin-picking/bin/verify_unit.mjs"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js skills/*/test/*.test.js"
   },
   "dependencies": {
     "@mujoco/mujoco": "4.0.1"

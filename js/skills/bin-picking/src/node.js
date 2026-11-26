@@ -42,7 +42,7 @@ export function simPin() {
   const req = createRequire(import.meta.url);
   const wasmPath = req.resolve('@mujoco/mujoco/mujoco.wasm'), pkgDir = path.dirname(wasmPath);
   const wasm = crypto.createHash('sha256').update(fs.readFileSync(wasmPath)).digest('hex');
-  const sim = JSON.parse(fs.readFileSync(path.join(src, '..', 'package.json'), 'utf8')).version;
+  const sim = JSON.parse(fs.readFileSync(path.join(src, '..', '..', '..', 'package.json'), 'utf8')).version;
   const mujoco = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version;
   return (_pin = { sim, code: code.digest('hex'), mujoco, wasm });
 }
