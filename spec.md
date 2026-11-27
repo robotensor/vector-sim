@@ -52,13 +52,17 @@ and `@vector/sim/<file>.js` for each file of `js/skills/bin-picking/src/`. A ski
 
 ## 4. Rounds
 
-What miners run for a round is the git tag `<leaf-id>-r<n>` in vector-miner, vector-env and vector-sim (round 1 of
-`bin-picking-expert` is `bin-picking-expert-r1`). Pins name these tags. No `v<number>` tag is used as a pin.
+What miners run for a round is the git tag `<leaf-id>-r<n>` in vector-miner, vector-env and vector-sim (round 2 of
+`bin-picking-expert` is `bin-picking-expert-r2`). Pins name these tags. No `v<number>` tag is used as a pin. Round 1
+was `bin-picking-expert-r1` of vector-miner; it installed vector-env and vector-sim at `v0.1.0`.
 
 ## 5. Behaviour
 
 Moving code between folders changes no result: the same scene and rows give bit-equal states, hashes, verdicts
 and `simPin()` before and after. Each skill's spec lists what must stay byte-identical.
+
+`meta.fill.bury.undo_failed` (0.2.0) only acts when a bury's last try fails: a scene without it, and a scene whose
+bury succeeded, fills to the same state as before.
 
 ## 6. Tests
 

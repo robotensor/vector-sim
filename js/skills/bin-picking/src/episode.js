@@ -73,6 +73,7 @@ function rainPlan(meta, F, S) {
     const ok = B && Array.isArray(B.parts) && B.parts.length >= 1 && B.parts.length <= 24
       && (B.ring_n === undefined || (Number.isInteger(B.ring_n) && B.ring_n >= 0 && B.ring_n < B.parts.length))
       && (B.cap === undefined || (Number.isFinite(B.cap) && B.cap >= 0 && B.cap <= 2))
+      && (B.undo_failed === undefined || typeof B.undo_failed === 'boolean')
       && B.parts.every((i) => Number.isInteger(i) && i >= 0 && i < meta.parts.length && !seen[i])
       && new Set(B.parts).size === B.parts.length && Array.isArray(B.quats) && B.quats.length === B.parts.length
       && B.quats.every((q) => Array.isArray(q) && q.length === 4 && q.every(Number.isFinite))
@@ -263,6 +264,13 @@ export class Episode {
       }
       if (!ok) f.cover = -1;
       f.buryTry = -1;
+      if (!ok && F.bury.undo_failed) {
+        // undo_failed: the last try failed too, so the pile goes back to its pre-bury snapshot (the bury parts parked
+        // again, out of the bin) and settles from there; without it the last try's parts stay on the pile
+        c.restore(f.burySnap);
+        f.spawned = f.rainSpawned;
+        return false;
+      }
     }
     f.settle++;
     // sleeping on: the pile has settled when every part is asleep; else by speed

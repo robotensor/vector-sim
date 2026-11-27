@@ -132,6 +132,8 @@ test('bury schedule: ring_n and cap are checked', () => {
   assert.throws(plan({ ...B, ring_n: 6 }), /malformed/);
   assert.throws(plan({ ...B, ring_n: 1.5 }), /malformed/);
   assert.throws(plan({ ...B, cap: -1 }), /malformed/);
+  assert.equal(plan({ ...B, undo_failed: true })().bury.undo_failed, true);
+  assert.throws(plan({ ...B, undo_failed: 1 }), /malformed/);
 });
 
 test('bury fill: one part on the target, a ring, a second layer; deterministic, everything stays in the bin', { skip: SKIP }, async () => {
@@ -149,4 +151,27 @@ test('bury fill: one part on the target, a ring, a second layer; deterministic, 
   assert.ok(f.buryLog && f.buryLog.length >= 1, 'the burying batch was dropped');
   assert.ok(parts.every((i) => a.c.active[i] && a.c.inside(i)), 'every bury part ends in the bin');
   a.c.dispose(); b.c.dispose();
+});
+
+test('bury fill with undo_failed: a bury whose last try fails takes its parts back out of the bin', { skip: SKIP }, async () => {
+  const mj = await mujoco();
+  const S = RAIN.meta.fill.spawns, parts = S.slice(-6).map((s) => s.part);
+  const sc = JSON.parse(JSON.stringify(RAIN));
+  sc.meta.fill.spawns = S.slice(0, -6);
+  const bare = JSON.parse(JSON.stringify(sc));
+  sc.meta.fill.bury = { parts, quats: S.slice(-6).map((s) => s.quat), ring_n: 3, cap: 0.5, ring: 0.75, size: 2, wall: 0.02,
+                        tries: 2, salt: 7, undo_failed: true };
+  const run = (x) => { const { files } = bundleFiles(ASSETS, x), c = Cell.create(mj, files, x); return { c, ep: fill(c) }; };
+  const a = run(sc), b = run(sc), none = run(bare);
+  assert.equal(a.ep.segments[0].hash, b.ep.segments[0].hash, 'deterministic');
+  const f = a.ep.fill;
+  assert.ok(f.buryLog.length >= 1 && f.cover === -1, 'the bury was tried and failed');
+  assert.ok(parts.every((i) => !a.c.active[i]), 'no bury part stays in the bin');
+  assert.equal(a.c.activeParts().length, sc.meta.fill.spawns.length);
+  assert.equal(f.spawned, sc.meta.fill.spawns.length);
+  assert.equal(f.level, none.ep.fill.level, 'the pile is the one the rain left');
+  // the verifier's unit-0 replay reruns the fill (bury, undo and settle) to the same state
+  const r = replayUnit(Cell.create(mj, bundleFiles(ASSETS, sc).files, sc), { index: 0, segments: [a.ep.segments[0]], checkObs: false });
+  assert.equal(r.error, null);
+  for (const x of [a, b, none]) x.c.dispose();
 });

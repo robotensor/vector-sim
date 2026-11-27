@@ -29,7 +29,8 @@ unchanged.
   - `sim`: `version` of the package's `package.json` (`js/package.json`, three folders above `src/`);
   - `code`: sha256 over `name\0content\0` of each pinned file, in `PIN_FILES` order, names without folders;
   - `mujoco`: the version of `@mujoco/mujoco`; `wasm`: sha256 of the `mujoco.wasm` it loads.
-- The four values equal those of the previous layout. A runtime whose `code` or `wasm` differs is another engine.
+- The four values equal those of the previous layout. 0.2.0 changes `sim` and `code` (`episode.js`: the fill's
+  `bury.undo_failed`). A runtime whose `code` or `wasm` differs is another engine.
 
 ## 3. Finding the asset bundle
 
