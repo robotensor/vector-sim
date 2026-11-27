@@ -26,7 +26,7 @@ flowchart LR
 ```
 
 - One control tick is 1/20 s (10 physics steps of 5 ms). A row is 6 arm joint targets (rad) and the grip, 0 to 1.
-- A try ends at `success`, `wrong_part`, `knocked_out`, `slipped`, `missed` or `timed_out` (`src/rules.js`);
+- A try ends at `success`, `wrong_part`, `knocked_out`, `slipped`, `missed`, `timed_out` or (pile scenes) `multi_pick` (`src/rules.js`);
   the time limit is the scene's `meta.config.rules.try_s`.
 
 ## API
@@ -113,7 +113,7 @@ reached as fast as the torque allows; interpolate between poses yourself. An emp
 
 | field | meaning |
 |---|---|
-| `outcome` | `success`, `wrong_part`, `knocked_out`, `slipped`, `missed` or `timed_out` |
+| `outcome` | `success`, `wrong_part`, `knocked_out`, `slipped`, `missed`, `timed_out` or `multi_pick` |
 | `t`, `tick` | try time (s) and tick of the verdict |
 | `part`, `detail` | the part the verdict is about, and a short reason (`held 31 mm above the line`) |
 | `hash` | `cell.hash()` at the verdict |
@@ -145,8 +145,11 @@ the outcomes. With the default rules:
 Pile scenes (`meta.config.rules.mode` is `pile`; a pile of 50–150 parts, one of them the target):
 
 - `success`: the target held by both pads, its lowest point at least `lift_clear` above the rim, no other part of the
-  bin up there, for `hold_s`. Only `success`, the time limit or a give-up end the try. A dropped target can be
-  picked again; holding, pushing or lifting other parts inside the bin is no verdict.
+  bin up there, for `hold_s`. Only `success`, `multi_pick`, the time limit or a give-up end the try. A dropped target
+  can be picked again; holding, pushing or lifting one other part at a time inside the bin is no verdict.
+- `multi_pick`: two or more parts that were in the bin when the pick began, the target or not, are above the lift
+  line at the same tick. The pick ends as a failure (pick score 0): only one part may be picked at a time. The parts
+  above the line leave with the gripper and are not outs; the outs are counted at that moment, as at a `success`.
 - An *out* is a part of the bin that is outside it and not touching the gripper (directly or through other parts),
   and either on the floor or at rest (slower than `settle_speed`) for `out_settle_s`. Outs stay outs and never end
   the try. When the try ends, every part outside the bin that is not held counts as an out too.
@@ -160,8 +163,8 @@ Pile scenes (`meta.config.rules.mode` is `pile`; a pile of 50–150 parts, one o
 - `physics_error` ends a pick (and the scene) when the simulation diverged and MuJoCo reset it.
 - Target classes, from the pile seen straight from above (`classify`, on the parts' convex hulls): `top` nothing lies over the part or
   presses on it from higher up; `blocked` at least 60 % of its outline is visible from above but parts lie on or
-  press against it; `buried` 10–60 % of its outline is visible; `hidden` the camera sees none of it and one layer of
-  parts covers it, each with nothing on top. Targets are never deeper than one layer.
+  press against it; `buried` 10–60 % of its outline is visible; `hidden` the camera sees none of it and one or two
+  layers of parts cover it (`rules.target.hidden_max_depth`, 2 for new scenes).
 
 ### Action logs
 

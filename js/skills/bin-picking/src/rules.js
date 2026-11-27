@@ -1,4 +1,4 @@
-export const FAILURES = ['missed', 'slipped', 'knocked_out', 'timed_out', 'wrong_part'];
+export const FAILURES = ['missed', 'slipped', 'knocked_out', 'timed_out', 'wrong_part', 'multi_pick'];
 // pile scenes: a pick that ends in a diverged simulation (MuJoCo reset itself); no verdict on the expert
 export const PHYSICS_ERROR = 'physics_error';
 export const OUTCOMES = ['success', ...FAILURES];
@@ -73,7 +73,8 @@ export class TryMonitor {
              target_class: this.targetClass };
   }
 
-  // Pile scenes: the try ends only on success, the time limit or a give-up. Dropping the target, holding another
+  // Pile scenes: the try ends on success, on multi_pick (two or more parts above the lift line at the same tick:
+  // only one part may be picked at a time), at the time limit or on a give-up. Dropping the target, holding another
   // part or pushing parts around is no verdict; outs are counted. At the end every part outside the bin and not held
   // counts as an out too, then: success; knocked_out (the target is an out); slipped (the target was lifted by
   // lift_dz and is not held now); missed (the grip closed on nothing and nothing was ever held); timed_out.
@@ -88,9 +89,13 @@ export class TryMonitor {
     }
     this.emptySeen ||= !!(s.emptyClose && nHeld === 0);
     this.heldSeen ||= nHeld > 0;
-    const ok = T !== null && T !== undefined && s.active[T] && s.held[T] && s.bottomZ[T] >= o.liftZ;
-    let alone = ok;
-    for (let i = 0; i < n && alone; i++) if (i !== T && this.ours[i] && s.active[i] && s.bottomZ[i] >= o.liftZ) alone = false;
+    const up = [];
+    for (let i = 0; i < n; i++) if (this.ours[i] && s.active[i] && s.bottomZ[i] >= o.liftZ) up.push(i);
+    if (up.length >= 2) {
+      this.multiParts = up;
+      return this._end(s, 'multi_pick', `${up.length} parts above the line (${up.join(', ')})`);
+    }
+    const alone = T !== null && T !== undefined && s.active[T] && s.held[T] && s.bottomZ[T] >= o.liftZ;
     if (alone) {
       if (this.okSince === null) this.okSince = t;
       if (t - this.okSince >= o.holdS - 1e-9) {
@@ -111,7 +116,7 @@ export class TryMonitor {
   }
 
   _end(s, outcome, detail) {
-    if (outcome === 'success') {
+    if (outcome === 'success' || outcome === 'multi_pick') {
       for (let i = 0; i < s.z.length; i++) if (!this.out[i] && this.ours[i] && s.active[i] && !s.inside[i] && !s.held[i]) this._markOut(i);
     }
     const out = v(outcome, s.t, this.target, detail);
@@ -183,11 +188,13 @@ export class TryMonitor {
   }
 
   toRemove(s, verdict) {
-    // pile scenes: the outs and a picked target go; a failed target and a part still in the gripper stay
+    // pile scenes: the outs and a picked target go, and on multi_pick every part above the line (they leave with the
+    // gripper); a failed target and a part still in the gripper stay
     if (this.pile) {
       const out = new Set(this.outParts);
       for (let i = 0; i < s.z.length; i++) if (s.active[i] && (!s.inside[i] || s.floor[i]) && !s.held[i]) out.add(i);
       if (verdict.outcome === 'success' && verdict.part !== null) out.add(verdict.part);
+      if (verdict.outcome === 'multi_pick') for (const i of this.multiParts || []) out.add(i);
       return [...out].filter((i) => s.active[i]).sort((a, b) => a - b);
     }
     const out = new Set();

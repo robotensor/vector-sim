@@ -42,12 +42,26 @@ test('pile rules: success needs the target held above the line, alone, for hold_
                                            'part', 't', 'target_class', 'tcp_path_m']);
   assert.equal(v.target_class, 'buried');
   assert.equal(v.outs, 0);
-  const other = run((k) => (k < 20 ? { ...lift, bottomZ: { 0: 0.31, 2: 0.32 } } : lift));
-  assert.equal(other.outcome, 'success', 'another part above the line holds the clock');
-  assert.equal(other.k, 30);
   const notTarget = run(() => ({ held: { 1: 1 }, bottomZ: { 1: 0.31 }, z: { 1: 0.34 } }));
   assert.equal(notTarget.outcome, 'timed_out', 'lifting another part is no verdict');
   assert.equal(notTarget.k, 60);
+});
+
+test('pile rules: two or more parts above the line at once end the pick as multi_pick; they leave with the gripper', () => {
+  const two = run((k) => (k < 3 ? lift : { ...lift, bottomZ: { 0: 0.31, 2: 0.32 }, held: { 0: 1, 2: 1 } }));
+  assert.equal(two.outcome, 'multi_pick');
+  assert.equal(two.k, 3);
+  assert.match(two.detail, /2 parts above the line \(0, 2\)/);
+  assert.deepEqual(two.mon.toRemove(st(two.t, { bottomZ: { 0: 0.31, 2: 0.32 } }), two), [0, 2]);
+  const others = run(() => ({ bottomZ: { 1: 0.31, 3: 0.4 } }));
+  assert.equal(others.outcome, 'multi_pick', 'any two parts count, the target or not');
+  assert.equal(others.k, 1);
+  const outside = run(() => ({ ...lift, bottomZ: { 0: 0.31, 2: 0.32 } }), {});
+  assert.equal(outside.outcome, 'multi_pick');
+  const notOurs = new TryMonitor(st(0, { inside: { 2: 0 } }), O);
+  let v = null;
+  for (let k = 1; k < 20 && !v; k++) v = notOurs.update(st(k * DT, { ...lift, bottomZ: { 0: 0.31, 2: 0.4 } }));
+  assert.equal(v.outcome, 'success', 'a part that was not in the bin when the pick began does not count');
 });
 
 test('pile rules: a dropped target is no verdict; at the end it is slipped, missed, knocked_out or timed_out', () => {
