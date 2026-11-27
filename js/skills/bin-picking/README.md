@@ -144,7 +144,8 @@ the outcomes. With the default rules:
 
 Pile scenes (`meta.config.rules.mode` is `pile`; a pile of 50–150 parts, one of them the target):
 
-- `success`: the target held by both pads, its lowest point at least `lift_clear` above the rim, no other part of the
+- `success`: the target held between the two fingers (on each side the pad, the follower or the spring link touches
+  it), its lowest point at least `lift_clear` above the rim, no other part of the
   bin up there, for `hold_s`. Only `success`, `multi_pick`, the time limit or a give-up end the try. A dropped target
   can be picked again; holding, pushing or lifting one other part at a time inside the bin is no verdict.
 - `multi_pick`: two or more parts that were in the bin when the pick began, the target or not, are above the lift

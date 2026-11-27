@@ -57,6 +57,7 @@ export class Cell {
     this.floorGeom = mj.mj_name2id(model, mj.mjtObj.mjOBJ_GEOM.value, 'table');
     // rules: pile scenes (meta.config.rules.mode == "pile") and the robot-vs-crate/table contacts behind crate_hits
     this.pileMode = (this.cfg.rules || {}).mode === 'pile';
+    if (this.pileMode) this._fingerSides(model);
     this.crateBody = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY.value, 'crate');
     this.isRobot = new Uint8Array(M.nbody);
     for (const b of this.R.robot_bodies || []) this.isRobot[b] = 1;
@@ -370,7 +371,18 @@ export class Cell {
     return lo;
   }
 
-  // held: between both pads; touch: touching the gripper; padAny: a pad touches a part; crateF: the largest normal
+  // Pile scenes: a finger is its pad's chain of bodies up to the gripper base (pad, follower, spring link), so a part
+  // clamped between one pad and the opposite finger's link is held. Older scenes keep the pads only.
+  _fingerSides(m) {
+    const grip = this.isGrip, par = m.body_parentid;
+    for (const [pads, side] of [[this.R.pad_left, this.isLeft], [this.R.pad_right, this.isRight]]) {
+      for (const p of pads) {
+        for (let a = p; a > 0 && grip[a] && grip[par[a]]; a = par[a]) side[a] = 1;
+      }
+    }
+  }
+
+  // held: between both fingers (pads only in older scenes); touch: touching the gripper; padAny: a pad touches a part; crateF: the largest normal
   // force (N) of a robot-vs-crate/table contact; carried (pile scenes): parts touching the gripper or, through
   // part-part contacts, a part that does.
   contacts() {

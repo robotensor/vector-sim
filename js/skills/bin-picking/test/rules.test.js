@@ -203,6 +203,14 @@ test('a pile-mode scene: same physics, verdict with metrics, uint16 seg', { skip
 
 function b64encodeNode(u8) { return Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength).toString('base64'); }
 
+test('a pile-mode scene: each finger is its pad chain up to the gripper base; older scenes keep the pads only', { skip: SKIP }, () => {
+  const names = (cell, side) => [...side].flatMap((v, b) => v ? [mj.mj_id2name(cell.m, mj.mjtObj.mjOBJ_BODY.value, b)] : []).sort();
+  const old = Cell.create(mj, files, scene), pile = Cell.create(mj, files, pileScene());
+  assert.deepEqual(names(old, old.isLeft), ['g_left_pad', 'g_left_silicone_pad']);
+  assert.deepEqual(names(pile, pile.isLeft), ['g_left_follower', 'g_left_pad', 'g_left_silicone_pad', 'g_left_spring_link']);
+  assert.deepEqual(names(pile, pile.isRight), ['g_right_follower', 'g_right_pad', 'g_right_silicone_pad', 'g_right_spring_link']);
+});
+
 test('a pile-mode scene: a part carried out of the bin is no out until it is let go and rests', { skip: SKIP }, () => {
   const { cell, ep } = settled(pileScene());
   const P = highestPart(cell), other = cell.activeParts().find((i) => i !== P);
