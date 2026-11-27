@@ -16,15 +16,19 @@ export class Camera {
     this.gid = new mj.IntBuffer(N);
     this.dist = new mj.DoubleBuffer(N);
     this.group = [1, 1, 1, 0, 0, 0];
-    const M = cell.meta, label = new Uint8Array(M.ngeom);
+    // seg labels: 0 nothing (or the table), i + 1 part i, then the crate and the robot: 254/255 in a uint8 image,
+    // 65534/65535 in a uint16 one (pile scenes, or more than 253 parts).
+    const M = cell.meta, wide = segDtype(cell) === 'uint16';
+    const label = wide ? new Uint16Array(M.ngeom) : new Uint8Array(M.ngeom), top = wide ? 65535 : 255;
+    this.segDtype = wide ? 'uint16' : 'uint8';
     const robot = new Uint8Array(M.nbody);
     for (const b of M.robot.robot_bodies) robot[b] = 1;
     for (let g = 0; g < M.ngeom; g++) {
       const b = cell.m.geom_bodyid[g], i = cell.bodyPart[b];
-      label[g] = i >= 0 ? i + 1 : robot[b] ? 255 : 0;
+      label[g] = i >= 0 ? i + 1 : robot[b] ? top : 0;
     }
     const crateBody = cell.mj.mj_name2id(cell.m, cell.mj.mjtObj.mjOBJ_BODY.value, 'crate');
-    for (let g = 0; g < M.ngeom; g++) if (cell.m.geom_bodyid[g] === crateBody) label[g] = 254;
+    for (let g = 0; g < M.ngeom; g++) if (cell.m.geom_bodyid[g] === crateBody) label[g] = top - 1;
     this.label = label;
   }
 
@@ -32,14 +36,16 @@ export class Camera {
     const { cell, c, N } = this;
     cell.mj.mj_multiRay(cell.m, cell.d, c.pos, this.vec, this.group, true, -1, this.gid, this.dist, null, N, c.max_depth);
     const dist = this.dist.GetView(), gid = this.gid.GetView();
-    const depth = new Uint16Array(N), seg = new Uint8Array(N);
+    const depth = new Uint16Array(N), seg = this.segDtype === 'uint16' ? new Uint16Array(N) : new Uint8Array(N);
     for (let k = 0; k < N; k++) {
       const z = dist[k];
       if (z < 0 || gid[k] < 0) continue;
       depth[k] = Math.min(65535, Math.round(z / c.depth_unit));
       seg[k] = this.label[gid[k]];
     }
-    return { width: c.width, height: c.height, depth, seg };
+    const out = { width: c.width, height: c.height, depth, seg };
+    if (this.segDtype !== 'uint8') out.seg_dtype = this.segDtype;
+    return out;
   }
 
   renderRGB(img = null) {
@@ -71,6 +77,18 @@ export class Camera {
   dispose() { this.gid.delete(); this.dist.delete(); }
 }
 
+export function segDtype(cell) {
+  return (cell.cfg.rules || {}).mode === 'pile' || cell.n > 253 ? 'uint16' : 'uint8';
+}
+
+// The seg image as bytes: uint8 as is, uint16 little-endian.
+export function segBytes(seg) {
+  if (seg instanceof Uint8Array) return seg;
+  const out = new Uint8Array(2 * seg.length);
+  for (let k = 0; k < seg.length; k++) { out[2 * k] = seg[k] & 255; out[2 * k + 1] = seg[k] >>> 8; }
+  return out;
+}
+
 export function observe(cell, camera) {
   const img = camera.render();
   const { q, grip } = cell.proprio();
@@ -78,7 +96,7 @@ export function observe(cell, camera) {
 }
 
 export function obsBytes(o) {
-  return [new Uint8Array(o.depth.buffer, o.depth.byteOffset, o.depth.byteLength), o.seg,
+  return [new Uint8Array(o.depth.buffer, o.depth.byteOffset, o.depth.byteLength), segBytes(o.seg),
           new Uint8Array(Float64Array.from(o.q).buffer), new Uint8Array(Float64Array.of(o.grip).buffer)];
 }
 
