@@ -123,3 +123,30 @@ test('rain fill: a settled, supported pile that sleeps; same fill twice; checkpo
   assert.deepEqual(r.checkpoint, cp);
   cell.dispose();
 });
+
+test('bury schedule: ring_n and cap are checked', () => {
+  const M = RAIN.meta, S = M.fill.spawns, keep = S.slice(0, -6), parts = S.slice(-6).map((s) => s.part);
+  const B = { parts, quats: S.slice(-6).map((s) => s.quat), ring: 0.75, size: 0.8, wall: 0.02, tries: 2, salt: 7 };
+  const plan = (b) => () => fillPlan({ ...M, fill: { ...M.fill, spawns: keep, bury: b } });
+  assert.equal(plan({ ...B, ring_n: 3, cap: 0.5 })().bury.ring_n, 3);
+  assert.throws(plan({ ...B, ring_n: 6 }), /malformed/);
+  assert.throws(plan({ ...B, ring_n: 1.5 }), /malformed/);
+  assert.throws(plan({ ...B, cap: -1 }), /malformed/);
+});
+
+test('bury fill: one part on the target, a ring, a second layer; deterministic, everything stays in the bin', { skip: SKIP }, async () => {
+  const mj = await mujoco();
+  const S = RAIN.meta.fill.spawns, parts = S.slice(-6).map((s) => s.part);
+  const sc = JSON.parse(JSON.stringify(RAIN));
+  sc.meta.fill.spawns = S.slice(0, -6);
+  sc.meta.fill.bury = { parts, quats: S.slice(-6).map((s) => s.quat), ring_n: 3, cap: 0.5, ring: 0.75, size: 2, wall: 0.02,
+                        tries: 2, salt: 7 };
+  const { files } = bundleFiles(ASSETS, sc);
+  const run = () => { const c = Cell.create(mj, files, sc), ep = fill(c); return { c, ep }; };
+  const a = run(), b = run();
+  assert.equal(a.ep.segments[0].hash, b.ep.segments[0].hash, 'the bury is deterministic');
+  const f = a.ep.fill;
+  assert.ok(f.buryLog && f.buryLog.length >= 1, 'the burying batch was dropped');
+  assert.ok(parts.every((i) => a.c.active[i] && a.c.inside(i)), 'every bury part ends in the bin');
+  a.c.dispose(); b.c.dispose();
+});

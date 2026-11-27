@@ -70,7 +70,9 @@ function rainPlan(meta, F, S) {
   out.max_ticks = batches.length * (out.calm_max_ticks + 1) + out.settle_max_ticks + 1;
   const B = F.bury;
   if (B !== undefined && B !== null) {
-    const ok = B && Array.isArray(B.parts) && B.parts.length >= 1 && B.parts.length <= 12
+    const ok = B && Array.isArray(B.parts) && B.parts.length >= 1 && B.parts.length <= 24
+      && (B.ring_n === undefined || (Number.isInteger(B.ring_n) && B.ring_n >= 0 && B.ring_n < B.parts.length))
+      && (B.cap === undefined || (Number.isFinite(B.cap) && B.cap >= 0 && B.cap <= 2))
       && B.parts.every((i) => Number.isInteger(i) && i >= 0 && i < meta.parts.length && !seen[i])
       && new Set(B.parts).size === B.parts.length && Array.isArray(B.quats) && B.quats.length === B.parts.length
       && B.quats.every((q) => Array.isArray(q) && q.length === 4 && q.every(Number.isFinite))
@@ -248,7 +250,7 @@ export class Episode {
       return false;
     }
     if (f.buryTry !== undefined && f.buryTry >= 0) {
-      // the burying batch fell on T: once it rests, T must classify hidden (one layer, camera-blind); else retry
+      // the burying batch fell on T: once it rests, T must classify hidden (at most hidden_max_depth layers, camera-blind); else retry
       f.buryTicks++;
       if (!(c.partsAsleep() || f.buryTicks >= F.settle_max_ticks)) return false;
       const K = classify(c), T = f.cover, ok = K.cls[T] === 'hidden';
@@ -283,8 +285,9 @@ export class Episode {
     return false;
   }
 
-  // Try t of the burying batch: its first part straight over T, the others on a ring around it (radius `ring` x the
-  // two bounding radii; the ring turns and tightens on every second round of candidates).
+  // Try t of the burying batch: its first part straight over T, the next `ring_n` (default: all the others) on a ring
+  // around it (radius `ring` x the two bounding radii; the ring turns and tightens on every second round of
+  // candidates), then the rest stacked over T as a second layer (on a circle of `cap` x the first part's radius).
   _bury(t) {
     const f = this.fill, c = this.cell, F = f.F, B = F.bury, L = f.buryList.length, P = c.meta.parts;
     f.buryTry = t;
@@ -293,7 +296,8 @@ export class Episode {
     const round = Math.floor(t / L), S = c.surface()[f.cover], b = c.crate;
     const x = b.x + b.cos * S.cx - b.sin * S.cy, y = b.y + b.sin * S.cx + b.cos * S.cy;
     const ring = B.ring * (round % 2 ? 0.75 : 1), a0 = ((B.salt % 360) * Math.PI) / 180 + (round * Math.PI) / 5;
-    const [p0, ...rest] = B.parts, r0 = P[p0].radius;
+    const [p0, ...others] = B.parts, r0 = P[p0].radius;
+    const nRing = B.ring_n === undefined ? others.length : B.ring_n, rest = others.slice(0, nRing), cap = others.slice(nRing);
     c.stackZ(p0, x, y, B.quats[0], F.floor_z, F.clearance);   // laid just onto T
     rest.forEach((p, k) => {
       const a = a0 + (2 * Math.PI * k) / rest.length, d = ring * (r0 + P[p].radius);
@@ -303,6 +307,14 @@ export class Episode {
       lx = Math.min(mx, Math.max(-mx, lx)); ly = Math.min(my, Math.max(-my, ly));
       const px = b.x + b.cos * lx - b.sin * ly, py = b.y + b.sin * lx + b.cos * ly;
       c.stackZ(p, px, py, B.quats[k + 1], F.floor_z, F.clearance);
+    });
+    cap.forEach((p, k) => {
+      const a = a0 + Math.PI / cap.length + (2 * Math.PI * k) / cap.length, d = (B.cap ?? 0.5) * r0;
+      let lx = S.cx + d * Math.cos(a), ly = S.cy + d * Math.sin(a);
+      const mx = Math.max(0, b.ix - P[p].radius), my = Math.max(0, b.iy - P[p].radius);
+      lx = Math.min(mx, Math.max(-mx, lx)); ly = Math.min(my, Math.max(-my, ly));
+      const px = b.x + b.cos * lx - b.sin * ly, py = b.y + b.sin * lx + b.cos * ly;
+      c.stackZ(p, px, py, B.quats[1 + nRing + k], F.floor_z, F.clearance);
     });
     f.spawned = f.rainSpawned + B.parts.length;
   }

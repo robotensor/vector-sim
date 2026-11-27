@@ -73,11 +73,12 @@ function chooseVisible(cell, seed, { minPx = 100 } = {}) {
 //   nothing (beyond that share) lies over it.
 // - pressed(i): a part in contact with i (hull contacts) whose top is more than press_dz above i's top.
 // - cam_px(i): pixels of i in the expert's camera seg image (`opts.seg`: that image of this state, else rendered).
-// Classes (at most one per part; parts outside the bin or with depth > 1 have none):
-// - hidden: depth == 1, vis <= hidden_vis (covered from straight above), cam_px < hidden_cam_share x the pixels it
-//   would have alone in the camera (pile removed), and every part covering >= depth_share of it has depth 0 (one
-//   layer of parts with nothing on them). A part the camera cannot see (cam_px <= hidden_max_px) that is not hidden
-//   has no class.
+// Classes (at most one per part; parts outside the bin or with depth > hidden_max_depth have none, and a part with
+// depth > 1 can only be hidden):
+// - hidden: 1 <= depth <= hidden_max_depth (D; 1 by default, under one layer), vis <= hidden_vis (covered from
+//   straight above), cam_px < hidden_cam_share x the pixels it would have alone in the camera (pile removed), and
+//   every part covering >= depth_share of it has depth <= D - 1 (at most D layers of parts over it). A part the camera
+//   cannot see (cam_px <= hidden_max_px) that is not hidden has no class.
 // - top: above(i) empty and not pressed, cam_px >= min_px.
 // - blocked: above(i) not empty or pressed, vis >= vis_blocked, cam_px >= min_px.
 // - buried: vis_buried <= vis < vis_blocked, cam_px >= buried_min_px.
@@ -85,7 +86,7 @@ export const TARGET_CLASSES = ['top', 'blocked', 'buried', 'hidden'];
 export const TARGET_DEFAULTS = { shares: { top: 0.2, blocked: 0.4, buried: 0.25, hidden: 0.15 }, res: 0.003,
                                  min_px: 100, buried_min_px: 20, vis_blocked: 0.6, vis_buried: 0.1, overlap_px: 3,
                                  depth_share: 0.1, hidden_max_px: 0, hidden_vis: 0.05,
-                                 hidden_cam_share: 0.15, press_dz: 0.005 };
+                                 hidden_cam_share: 0.15, press_dz: 0.005, hidden_max_depth: 1 };
 
 export function isPile(cell) { return (cell.cfg.rules || {}).mode === 'pile'; }
 
@@ -235,15 +236,15 @@ export function classify(cell, opts = {}) {
     }
   } finally { con.delete(); }
 
-  const cls = new Array(n).fill(null);
+  const cls = new Array(n).fill(null), D = Math.max(1, Math.floor(Number(T.hidden_max_depth) || 1));
   for (let i = 0; i < n; i++) {
-    if (!cell.active[i] || !cell.inside(i) || !sil[i] || !sil[i].px.length || depth[i] > 1) continue;
-    if (depth[i] === 1 && vis[i] <= T.hidden_vis
-        && above[i].every((j, k) => share[i][k] < T.depth_share || depth[j] === 0)) {
+    if (!cell.active[i] || !cell.inside(i) || !sil[i] || !sil[i].px.length || depth[i] > D) continue;
+    if (depth[i] >= 1 && vis[i] <= T.hidden_vis
+        && above[i].every((j, k) => share[i][k] < T.depth_share || depth[j] <= D - 1)) {
       const alone = camAlone(i);
       if (alone > 0 && camPx[i] < T.hidden_cam_share * alone) { cls[i] = 'hidden'; continue; }
     }
-    if (camPx[i] <= T.hidden_max_px) continue;
+    if (depth[i] > 1 || camPx[i] <= T.hidden_max_px) continue;
     if (!above[i].length && !pressed[i]) { if (camPx[i] >= T.min_px) cls[i] = 'top'; }
     else if (vis[i] >= T.vis_blocked) { if (camPx[i] >= T.min_px) cls[i] = 'blocked'; }
     else if (vis[i] >= T.vis_buried) { if (camPx[i] >= T.buried_min_px) cls[i] = 'buried'; }
