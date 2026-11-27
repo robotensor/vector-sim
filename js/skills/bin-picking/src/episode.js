@@ -1,5 +1,6 @@
 import { TryMonitor } from './rules.js';
 import { f64ToB64, b64ToF64, b64encode, b64decode } from './hash.js';
+import { classify } from './plan.js';
 
 export const CTRL = 7;
 export const LOG_FORMAT = 'vector-episode/2';
@@ -11,6 +12,7 @@ const EDIT_SETTLE_TICKS = 120;
 export function fillPlan(meta) {
   const F = meta.fill || {}, S = F.spawns;
   if (!Array.isArray(S)) throw new Error('scene has no fill schedule (meta.fill.spawns)');
+  if (F.mode === 'rain') return rainPlan(meta, F, S);
   const mode = F.mode === 'place' ? 'place' : S.length && S.every((s) => s && Array.isArray(s.xy)) ? 'stack' : F.mode === 'stack' ? 'stack' : null;
   if (!mode) throw new Error('scene fill schedule is the old drop kind or malformed: recompose the scene with this vector-sim');
   for (const s of S) {
@@ -30,6 +32,72 @@ export function fillPlan(meta) {
   out.rest_ticks = Math.min(out.settle_max_ticks, Math.max(1, Math.floor(out.rest_ticks)));
   out.max_ticks = (mode === 'stack' ? S.length * (out.calm_max_ticks + 1) : 0) + out.settle_max_ticks + 1;
   return out;
+}
+
+const RAIN_DEFAULTS = { floor_z: 0, clearance: 0.003, drop: 0.01, level: 0.6, level_cell: 0.01, level_q: 0.5,
+                        batch_min_ticks: 6, calm_speed: 0.05, calm_max_ticks: 40, settle_max_ticks: 200,
+                        rest_speed: 0.01, rest_ticks: 6 };
+
+// Rain fill: batches of parts (meta.fill.spawns, each {part, xy, quat, batch}) drop into the bin one batch at a time,
+// each part just above the parts under it. A batch falls once the pile is calm (or after calm_max_ticks); the rain stops
+// when the pile surface reaches `level` of the bin depth or the schedule ends, then the pile settles.
+function rainPlan(meta, F, S) {
+  const bad = () => new Error('scene fill schedule is malformed: recompose the scene with this vector-sim');
+  const seen = new Uint8Array(meta.parts.length), batches = [];
+  for (let k = 0; k < S.length; k++) {
+    const s = S[k];
+    const ok = s && Number.isInteger(s.part) && s.part >= 0 && s.part < meta.parts.length && !seen[s.part]
+      && Array.isArray(s.quat) && s.quat.length === 4 && Array.isArray(s.xy) && s.xy.length === 2
+      && [...s.quat, ...s.xy].every(Number.isFinite) && Number.isInteger(s.batch);
+    if (!ok) throw bad();
+    seen[s.part] = 1;
+    if (s.batch === batches.length) batches.push([k, k + 1]);
+    else if (s.batch === batches.length - 1) batches[s.batch][1] = k + 1;
+    else throw bad();
+  }
+  const out = { mode: 'rain', spawns: S, batches };
+  for (const [k, d] of Object.entries(RAIN_DEFAULTS)) {
+    const v = F[k] === undefined || F[k] === null ? d : F[k];
+    if (!Number.isFinite(v)) throw new Error(`scene meta.fill.${k} is not a number`);
+    out[k] = v;
+  }
+  out.batch_min_ticks = Math.min(200, Math.max(1, Math.floor(out.batch_min_ticks)));
+  out.calm_max_ticks = Math.min(400, Math.max(out.batch_min_ticks, Math.floor(out.calm_max_ticks)));
+  out.settle_max_ticks = Math.min(2400, Math.max(1, Math.floor(out.settle_max_ticks)));
+  out.rest_ticks = Math.min(out.settle_max_ticks, Math.max(1, Math.floor(out.rest_ticks)));
+  out.level_cell = Math.min(0.1, Math.max(0.002, out.level_cell));
+  out.level_q = Math.min(1, Math.max(0, out.level_q));
+  out.max_ticks = batches.length * (out.calm_max_ticks + 1) + out.settle_max_ticks + 1;
+  const B = F.bury;
+  if (B !== undefined && B !== null) {
+    const ok = B && Array.isArray(B.parts) && B.parts.length >= 1 && B.parts.length <= 12
+      && B.parts.every((i) => Number.isInteger(i) && i >= 0 && i < meta.parts.length && !seen[i])
+      && new Set(B.parts).size === B.parts.length && Array.isArray(B.quats) && B.quats.length === B.parts.length
+      && B.quats.every((q) => Array.isArray(q) && q.length === 4 && q.every(Number.isFinite))
+      && [B.ring, B.wall, B.size].every(Number.isFinite) && Number.isInteger(B.tries) && B.tries >= 1 && B.tries <= 12
+      && Number.isInteger(B.salt);
+    if (!ok) throw bad();
+    out.bury = B;
+    out.max_ticks += (B.tries + 1) * out.settle_max_ticks;
+  }
+  return out;
+}
+
+// The parts a burying batch may target, best first: `top` parts (classify, ray meshes) at most `size` x the batch's
+// first part (bounding radius), clear of the walls, nearest the crate centre (the camera axis); order rotated by the schedule's salt.
+export function buryCandidates(cell, B) {
+  const S = cell.surface(), c = cell.crate, K = classify(cell), ok = [];
+  for (let i = 0; i < cell.n; i++) {
+    const s = S[i];
+    if (!s || K.cls[i] !== 'top') continue;
+    if (Math.abs(s.cx) > c.ix - B.wall || Math.abs(s.cy) > c.iy - B.wall) continue;
+    // small parts first (the batch's first part covers them best), then nearest the centre
+    const big = cell.meta.parts[i].radius > B.size * cell.meta.parts[B.parts[0]].radius;
+    ok.push({ i, key: (big ? 1 : 0) + Math.hypot(s.cx, s.cy) });
+  }
+  ok.sort((a, b) => a.key - b.key || a.i - b.i);
+  const top = ok.slice(0, Math.ceil(B.tries / 2)).map((o) => o.i), k = top.length ? (B.salt >>> 0) % top.length : 0;
+  return [...top.slice(k), ...top.slice(0, k)];
 }
 
 export class Episode {
@@ -66,7 +134,9 @@ export class Episode {
   checkpoint() {
     if (!this.base) throw new Error('no unit finished yet');
     const { snap, tries } = this.base;
-    return { state: f64ToB64(snap.state), active: b64encode(snap.active), ticks: snap.ticks, tries };
+    const cp = { state: f64ToB64(snap.state), active: b64encode(snap.active), ticks: snap.ticks, tries };
+    if (snap.asleep) cp.asleep = b64encode(snap.asleep);
+    return cp;
   }
 
   restoreCheckpoint(cp) {
@@ -74,6 +144,10 @@ export class Episode {
     if (snap.state.length !== this.cell.nstate) throw new Error('checkpoint state size');
     if (snap.active.length !== this.cell.n) throw new Error('checkpoint active size');
     if (!Number.isInteger(cp.tries) || cp.tries < 0) throw new Error('checkpoint tries');
+    if (cp.asleep !== undefined) {
+      snap.asleep = Uint8Array.from(b64decode(cp.asleep));
+      if (!this.cell.sleep || snap.asleep.length !== this.cell.m.ntree) throw new Error('checkpoint sleep state size');
+    }
     this.cell.restore(snap);
     this.segments = [];
     this._units = [];
@@ -104,6 +178,7 @@ export class Episode {
 
   fillStep() {
     const f = this.fill, c = this.cell, F = f.F, S = F.spawns;
+    if (F.mode === 'rain') return this._rainStep();
     if (F.mode === 'place' && f.k === 0) {
       for (const s of S) c.spawn(s.part, s.pos, s.quat);
       f.next = S.length;
@@ -121,7 +196,8 @@ export class Episode {
       f.calm = v < F.calm_speed;
       return false;
     }
-    f.rest = v < F.rest_speed ? f.rest + 1 : 0;
+    if (c.sleep) f.rest = c.partsAsleep() ? F.rest_ticks : 0;  // sleeping scenes: settled when every part sleeps
+    else f.rest = v < F.rest_speed ? f.rest + 1 : 0;
     if (f.rest >= F.rest_ticks || f.since >= F.settle_max_ticks || f.k >= F.max_ticks) {
       const t = c.tick(0);
       const out = [];
@@ -135,6 +211,100 @@ export class Episode {
       return true;
     }
     return false;
+  }
+
+  _rainStep() {
+    const f = this.fill, c = this.cell, F = f.F, S = F.spawns;
+    if (f.k === 0) Object.assign(f, { batch: 0, raining: true, level: 0, spawned: 0, settle: 0 });
+    if (f.raining && (f.k === 0 || (f.since >= F.batch_min_ticks && (f.calm || f.since >= F.calm_max_ticks)))) {
+      if (f.k > 0) {
+        f.level = c.pileLevel(F.level_cell, F.level_q);
+        if (f.level >= F.level) f.raining = false;
+      }
+      if (f.batch >= F.batches.length) f.raining = false;
+      if (!f.raining && F.bury && f.cover === undefined) {
+        f.buryList = buryCandidates(c, F.bury);
+        f.cover = -1;
+        f.rainSpawned = f.spawned;
+        if (f.buryList.length) { f.burySnap = c.snapshot(); this._bury(0); }
+      }
+      if (f.raining && f.batch < F.batches.length) {
+        const [a, b] = F.batches[f.batch++];
+        for (let k = a; k < b; k++) {
+          const s = S[k];
+          c.spawn(s.part, [s.xy[0], s.xy[1], c.rainZ(s.part, s.xy[0], s.xy[1], F.floor_z, F.clearance, F.drop)], s.quat, false);
+        }
+        c.mj.mj_forward(c.m, c.d);
+        f.spawned = b;
+        f.since = 0;
+      } else f.raining = false;
+    }
+    c.step(f.hold);
+    f.k++;
+    f.since++;
+    const v = c.maxPartSpeed();
+    if (f.raining && f.k < F.max_ticks) {
+      f.calm = v < F.calm_speed;
+      return false;
+    }
+    if (f.buryTry !== undefined && f.buryTry >= 0) {
+      // the burying batch fell on T: once it rests, T must classify hidden (one layer, camera-blind); else retry
+      f.buryTicks++;
+      if (!(c.partsAsleep() || f.buryTicks >= F.settle_max_ticks)) return false;
+      const K = classify(c), T = f.cover, ok = K.cls[T] === 'hidden';
+      (f.buryLog ||= []).push({ T, cls: K.cls[T], vis: K.vis[T], depth: K.depth[T], cam: K.camPx[T],
+                                above: K.above[T].map((j) => [j, K.depth[j]]) });
+      if (!ok && f.buryTry + 1 < F.bury.tries) {
+        c.restore(f.burySnap);
+        this._bury(f.buryTry + 1);
+        return false;
+      }
+      if (!ok) f.cover = -1;
+      f.buryTry = -1;
+    }
+    f.settle++;
+    // sleeping on: the pile has settled when every part is asleep; else by speed
+    if (c.sleep) f.rest = c.partsAsleep() ? F.rest_ticks : 0;
+    else f.rest = v < F.rest_speed ? f.rest + 1 : 0;
+    if (f.rest >= F.rest_ticks || f.settle >= F.settle_max_ticks || f.k >= F.max_ticks) {
+      f.asleep = c.partsAsleep();
+      const t = c.tick(0);
+      const out = [];
+      for (let i = 0; i < c.n; i++) if (c.active[i] && !t.inside[i]) out.push(i);
+      for (const i of out) c.park(i);
+      f.level = c.pileLevel(F.level_cell, F.level_q);
+      const seg = { kind: 'fill', ticks: f.k, removed: out, hash: c.hash() };
+      this.segments.push(seg);
+      f.done = true;
+      this._open = [seg];
+      this.phase = 'setup';
+      return true;
+    }
+    return false;
+  }
+
+  // Try t of the burying batch: its first part straight over T, the others on a ring around it (radius `ring` x the
+  // two bounding radii; the ring turns and tightens on every second round of candidates).
+  _bury(t) {
+    const f = this.fill, c = this.cell, F = f.F, B = F.bury, L = f.buryList.length, P = c.meta.parts;
+    f.buryTry = t;
+    f.cover = f.buryList[t % L];
+    f.buryTicks = 0;
+    const round = Math.floor(t / L), S = c.surface()[f.cover], b = c.crate;
+    const x = b.x + b.cos * S.cx - b.sin * S.cy, y = b.y + b.sin * S.cx + b.cos * S.cy;
+    const ring = B.ring * (round % 2 ? 0.75 : 1), a0 = ((B.salt % 360) * Math.PI) / 180 + (round * Math.PI) / 5;
+    const [p0, ...rest] = B.parts, r0 = P[p0].radius;
+    c.stackZ(p0, x, y, B.quats[0], F.floor_z, F.clearance);   // laid just onto T
+    rest.forEach((p, k) => {
+      const a = a0 + (2 * Math.PI * k) / rest.length, d = ring * (r0 + P[p].radius);
+      // keep the ring part inside the walls (crate frame)
+      let lx = S.cx + d * Math.cos(a), ly = S.cy + d * Math.sin(a);
+      const mx = Math.max(0, b.ix - P[p].radius), my = Math.max(0, b.iy - P[p].radius);
+      lx = Math.min(mx, Math.max(-mx, lx)); ly = Math.min(my, Math.max(-my, ly));
+      const px = b.x + b.cos * lx - b.sin * ly, py = b.y + b.sin * lx + b.cos * ly;
+      c.stackZ(p, px, py, B.quats[k + 1], F.floor_z, F.clearance);
+    });
+    f.spawned = f.rainSpawned + B.parts.length;
   }
 
   _settle() {
@@ -197,13 +367,14 @@ export class Episode {
     return this._endUnit(this._open);
   }
 
-  beginTry(target) {
+  // targetClass (pile scenes): the target's class from the scene (target_class), carried into the verdict.
+  beginTry(target, targetClass = null) {
     if (this.phase === 'setup') this.sealSetup();
     if (this.phase !== 'ready') throw new Error(`a try cannot start now (${this.phase})`);
     const c = this.cell;
     const first = c.tick(0);
     this.cur = { kind: 'try', i: this.tries++, target, ctrl: [], calls: [], verdict: null, ticks: 0,
-                 mon: new TryMonitor(first, c.monitorOptions(target)), start: c.snapshot() };
+                 mon: new TryMonitor(first, { ...c.monitorOptions(target), targetClass }), start: c.snapshot() };
     this._open = [];
     this.phase = 'try';
     return this.cur;

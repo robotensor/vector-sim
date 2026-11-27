@@ -1,6 +1,8 @@
 import { fnv64 } from './hash.js';
 
 const STATE = 'mjSTATE_INTEGRATION';
+// crate_hits: a tick counts when a robot-vs-crate/table contact pushes harder than this (N), unless rules.crate_hit_force
+export const CRATE_HIT_FORCE = 75;
 
 export function yawCosSin(c) {
   const q = c.quat;
@@ -51,7 +53,14 @@ export class Cell {
                      ix: c.inner_half[0], iy: c.inner_half[1], floor: c.floor_z, rim: c.rim_z };
     }
     this.ticks = 0;
+    this.sleep = (model.opt.enableflags & mj.mjtEnableBit.mjENBL_SLEEP.value) !== 0;
     this.floorGeom = mj.mj_name2id(model, mj.mjtObj.mjOBJ_GEOM.value, 'table');
+    // rules: pile scenes (meta.config.rules.mode == "pile") and the robot-vs-crate/table contacts behind crate_hits
+    this.pileMode = (this.cfg.rules || {}).mode === 'pile';
+    this.crateBody = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY.value, 'crate');
+    this.isRobot = new Uint8Array(M.nbody);
+    for (const b of this.R.robot_bodies || []) this.isRobot[b] = 1;
+    this.forceBuf = new mj.DoubleBuffer(6);
     for (let i = 0; i < this.n; i++) this._setPart(i, false);
   }
 
@@ -65,6 +74,7 @@ export class Cell {
   }
 
   dispose() {
+    this.forceBuf.delete();
     this.stateBuf.delete();
     this.d.delete();
     this.m.delete();
@@ -94,7 +104,12 @@ export class Cell {
   step(ctrl) {
     if (ctrl) this.setCtrl(ctrl);
     const { mj, m, d } = this;
-    for (let k = 0; k < this.meta.substeps; k++) mj.mj_step(m, d);
+    // resets: MuJoCo's automatic reset on a diverged state (time jumps back), counted for the pile rules
+    for (let k = 0; k < this.meta.substeps; k++) {
+      const t0 = d.time;
+      mj.mj_step(m, d);
+      if (!(d.time > t0)) this.resets = (this.resets || 0) + 1;
+    }
     this.ticks++;
   }
 
@@ -109,6 +124,7 @@ export class Cell {
   _setPart(i, on) {
     const { m } = this;
     const p = this.meta.parts[i];
+    if (p.frozen) { this.active[i] = 0; return; }  // a frozen part is a static collider, never an active part
     for (const g of p.hull_geoms) { m.geom_contype[g] = on ? 1 : 0; m.geom_conaffinity[g] = on ? 1 : 0; }
     m.body_contype[p.body] = on ? 1 : 0;
     m.body_conaffinity[p.body] = on ? 1 : 0;
@@ -116,14 +132,14 @@ export class Cell {
     this.active[i] = on ? 1 : 0;
   }
 
-  spawn(i, pos, quat) {
+  spawn(i, pos, quat, forward = true) {
     const { d } = this;
     const p = this.meta.parts[i];
     this._setPart(i, true);
     for (let k = 0; k < 3; k++) d.qpos[p.qpos + k] = pos[k];
     for (let k = 0; k < 4; k++) d.qpos[p.qpos + 3 + k] = quat[k];
     for (let k = 0; k < 6; k++) d.qvel[p.dof + k] = 0;
-    this.mj.mj_forward(this.m, this.d);
+    if (forward) this.mj.mj_forward(this.m, this.d);
   }
 
   stackZ(i, x, y, quat, floorZ = 0, clearance = 0.005) {
@@ -152,6 +168,104 @@ export class Cell {
     return z;
   }
 
+  // Rain fill: the height for part i dropped at (x, y), its bounding sphere clear of every part's bounding sphere and of
+  // the floor by `clearance`, plus `drop`.
+  rainZ(i, x, y, floorZ, clearance, drop) {
+    const P = this.meta.parts, xp = this.d.xpos, ri = P[i].radius;
+    let z = floorZ + ri;
+    for (let j = 0; j < this.n; j++) {
+      if (!this.active[j] || j === i) continue;
+      const b = 3 * P[j].body, rr = ri + P[j].radius;
+      const dx = xp[b] - x, dy = xp[b + 1] - y, d2 = dx * dx + dy * dy;
+      if (d2 < rr * rr) z = Math.max(z, xp[b + 2] + Math.sqrt(rr * rr - d2));
+    }
+    return z + clearance + drop;
+  }
+
+  // Pile surface height over the bin floor: a height map on a `cell`-sized grid over the inner floor (each cell the top
+  // of the highest hull piece whose box covers the cell centre, the floor if none), its q-quantile, as a share of the
+  // floor-to-rim depth.
+  pileLevel(cell = 0.01, q = 0.5) {
+    const c = this.crate, d = this.d;
+    const nx = Math.max(1, Math.round((2 * c.ix) / cell)), ny = Math.max(1, Math.round((2 * c.iy) / cell));
+    const hx = (2 * c.ix) / nx, hy = (2 * c.iy) / ny, H = new Float64Array(nx * ny).fill(c.floor);
+    for (let i = 0; i < this.n; i++) {
+      if (!this.active[i] || !this.inside(i)) continue;
+      for (const { g, v } of this.hulls[i]) {
+        const p = 3 * g, R = 9 * g, X = d.geom_xmat, o = d.geom_xpos;
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, top = -Infinity;
+        for (let k = 0; k < v.length; k += 3) {
+          const wx = o[p] + X[R] * v[k] + X[R + 1] * v[k + 1] + X[R + 2] * v[k + 2] - c.x;
+          const wy = o[p + 1] + X[R + 3] * v[k] + X[R + 4] * v[k + 1] + X[R + 5] * v[k + 2] - c.y;
+          const wz = o[p + 2] + X[R + 6] * v[k] + X[R + 7] * v[k + 1] + X[R + 8] * v[k + 2];
+          const lx = c.cos * wx + c.sin * wy, ly = -c.sin * wx + c.cos * wy;
+          if (lx < x0) x0 = lx; if (lx > x1) x1 = lx; if (ly < y0) y0 = ly; if (ly > y1) y1 = ly; if (wz > top) top = wz;
+        }
+        const a0 = Math.max(0, Math.ceil((x0 + c.ix) / hx - 0.5)), a1 = Math.min(nx - 1, Math.floor((x1 + c.ix) / hx - 0.5));
+        const b0 = Math.max(0, Math.ceil((y0 + c.iy) / hy - 0.5)), b1 = Math.min(ny - 1, Math.floor((y1 + c.iy) / hy - 0.5));
+        for (let a = a0; a <= a1; a++) for (let b = b0; b <= b1; b++) if (top > H[a * ny + b]) H[a * ny + b] = top;
+      }
+    }
+    const s = Array.from(H).sort((u, w) => u - w);
+    const z = s[Math.min(s.length - 1, Math.max(0, Math.floor(q * (s.length - 1))))];
+    return (z - c.floor) / (c.rim - c.floor);
+  }
+
+  // Top-down view of the pile on a `cell` grid (hull-piece boxes, as pileLevel): per active part inside the bin the
+  // share of its cells where it is the highest part, and the centre and half sizes of its box in crate axes.
+  surface(cell = 0.005) {
+    const c = this.crate, d = this.d, n = this.n;
+    const nx = Math.max(1, Math.round((2 * c.ix) / cell)), ny = Math.max(1, Math.round((2 * c.iy) / cell));
+    const hx = (2 * c.ix) / nx, hy = (2 * c.iy) / ny, H = new Float64Array(nx * ny).fill(-Infinity), L = new Int32Array(nx * ny).fill(-1);
+    const box = [], own = new Float64Array(n), tot = new Float64Array(n), out = new Array(n).fill(null);
+    for (let i = 0; i < n; i++) {
+      if (!this.active[i] || !this.inside(i)) continue;
+      const B = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, top: -Infinity, pieces: [] };
+      for (const { g, v } of this.hulls[i]) {
+        const p = 3 * g, R = 9 * g, X = d.geom_xmat, o = d.geom_xpos;
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, top = -Infinity;
+        for (let k = 0; k < v.length; k += 3) {
+          const wx = o[p] + X[R] * v[k] + X[R + 1] * v[k + 1] + X[R + 2] * v[k + 2] - c.x;
+          const wy = o[p + 1] + X[R + 3] * v[k] + X[R + 4] * v[k + 1] + X[R + 5] * v[k + 2] - c.y;
+          const wz = o[p + 2] + X[R + 6] * v[k] + X[R + 7] * v[k + 1] + X[R + 8] * v[k + 2];
+          const lx = c.cos * wx + c.sin * wy, ly = -c.sin * wx + c.cos * wy;
+          if (lx < x0) x0 = lx; if (lx > x1) x1 = lx; if (ly < y0) y0 = ly; if (ly > y1) y1 = ly; if (wz > top) top = wz;
+        }
+        B.pieces.push([x0, x1, y0, y1, top]);
+        B.x0 = Math.min(B.x0, x0); B.x1 = Math.max(B.x1, x1); B.y0 = Math.min(B.y0, y0); B.y1 = Math.max(B.y1, y1); B.top = Math.max(B.top, top);
+      }
+      box[i] = B;
+      for (const [x0, x1, y0, y1, top] of B.pieces) {
+        const a0 = Math.max(0, Math.ceil((x0 + c.ix) / hx - 0.5)), a1 = Math.min(nx - 1, Math.floor((x1 + c.ix) / hx - 0.5));
+        const b0 = Math.max(0, Math.ceil((y0 + c.iy) / hy - 0.5)), b1 = Math.min(ny - 1, Math.floor((y1 + c.iy) / hy - 0.5));
+        for (let a = a0; a <= a1; a++) for (let b = b0; b <= b1; b++) {
+          const k = a * ny + b;
+          if (top > H[k]) { H[k] = top; L[k] = i; }
+        }
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const B = box[i];
+      if (!B) continue;
+      const a0 = Math.max(0, Math.ceil((B.x0 + c.ix) / hx - 0.5)), a1 = Math.min(nx - 1, Math.floor((B.x1 + c.ix) / hx - 0.5));
+      const b0 = Math.max(0, Math.ceil((B.y0 + c.iy) / hy - 0.5)), b1 = Math.min(ny - 1, Math.floor((B.y1 + c.iy) / hy - 0.5));
+      for (let a = a0; a <= a1; a++) for (let b = b0; b <= b1; b++) {
+        const k = a * ny + b;
+        let under = false;
+        for (const [x0, x1, y0, y1] of B.pieces) {
+          const lx = -c.ix + (a + 0.5) * hx, ly = -c.iy + (b + 0.5) * hy;
+          if (lx >= x0 && lx <= x1 && ly >= y0 && ly <= y1) { under = true; break; }
+        }
+        if (!under) continue;
+        tot[i]++;
+        if (L[k] === i) own[i]++;
+      }
+      out[i] = { exposed: tot[i] ? own[i] / tot[i] : 0, cx: (B.x0 + B.x1) / 2, cy: (B.y0 + B.y1) / 2,
+                 hx: (B.x1 - B.x0) / 2, hy: (B.y1 - B.y0) / 2, top: B.top };
+    }
+    return out;
+  }
+
   maxPartSpeed() {
     const v = this.d.qvel, P = this.meta.parts;
     let m2 = 0;
@@ -177,20 +291,60 @@ export class Cell {
 
   snapshot() {
     this.mj.mj_getState(this.m, this.d, this.stateBuf, this.stateSpec);
-    return { state: Float64Array.from(this.stateBuf.GetView()), active: Uint8Array.from(this.active), ticks: this.ticks };
+    const s = { state: Float64Array.from(this.stateBuf.GetView()), active: Uint8Array.from(this.active), ticks: this.ticks };
+    if (this.sleep) s.asleep = this.asleepMask();
+    return s;
+  }
+
+  // Every active part asleep (sleeping on).
+  partsAsleep() {
+    if (!this.sleep) return false;
+    const A = this.d.tree_asleep, T = this.m.body_treeid, P = this.meta.parts;
+    for (let i = 0; i < this.n; i++) if (this.active[i] && A[T[P[i].body]] < 0) return false;
+    return true;
+  }
+
+  // Sleeping trees (1 = asleep), one byte per kinematic tree.
+  asleepMask() {
+    const a = this.d.tree_asleep, out = new Uint8Array(this.m.ntree);
+    for (let t = 0; t < out.length; t++) out[t] = a[t] >= 0 ? 1 : 0;
+    return out;
   }
 
   restore(s) {
+    const { mj, m, d } = this;
     for (let i = 0; i < this.n; i++) this._setPart(i, !!s.active[i]);
-    this.mj.mj_setState(this.m, this.d, s.state, this.stateSpec);
+    if (this.sleep) this._resetAsleep(s);
+    mj.mj_setState(m, d, s.state, this.stateSpec);
     this.ticks = s.ticks;
-    this.mj.mj_forward(this.m, this.d);
+    mj.mj_forward(m, d);
+  }
+
+  // With sleeping on, a restore must not depend on what the data held before (mj_setState keeps a sleeping tree asleep
+  // when its bytes do not change), and the state API does not carry the sleep state. So: reset the data with the
+  // snapshot's configuration as qpos0 and its sleeping trees marked "initialized asleep" (mj_resetData then puts them
+  // to sleep at exactly these poses), then set the state. Same snapshot -> same data, in any cell, any process.
+  _resetAsleep(s) {
+    const { mj, m, d } = this, nq = m.nq, q0 = Float64Array.from(m.qpos0), pol = Int32Array.from(m.tree_sleep_policy);
+    const A = s.asleep, INIT = mj.mjtSleepPolicy.mjSLEEP_INIT.value;
+    try {
+      if (A) {
+        for (let k = 0; k < nq; k++) m.qpos0[k] = s.state[1 + k];
+        for (let t = 0; t < m.ntree; t++) if (A[t]) m.tree_sleep_policy[t] = INIT;
+      }
+      mj.mj_resetData(m, d);
+    } finally {
+      for (let k = 0; k < nq; k++) m.qpos0[k] = q0[k];
+      for (let t = 0; t < m.ntree; t++) m.tree_sleep_policy[t] = pol[t];
+    }
   }
 
   hash() {
     this.mj.mj_getState(this.m, this.d, this.stateBuf, this.stateSpec);
     const st = this.stateBuf.GetView();
-    return fnv64([new Uint8Array(st.buffer, st.byteOffset, st.byteLength), this.active]);
+    const parts = [new Uint8Array(st.buffer, st.byteOffset, st.byteLength), this.active];
+    if (this.sleep) parts.push(this.asleepMask());
+    return fnv64(parts);
   }
 
   partZ(i) { return this.d.xpos[3 * this.meta.parts[i].body + 2]; }
@@ -216,16 +370,29 @@ export class Cell {
     return lo;
   }
 
+  // held: between both pads; touch: touching the gripper; padAny: a pad touches a part; crateF: the largest normal
+  // force (N) of a robot-vs-crate/table contact; carried (pile scenes): parts touching the gripper or, through
+  // part-part contacts, a part that does.
   contacts() {
     const { m, d, n } = this;
     const left = new Uint8Array(n), right = new Uint8Array(n), touch = new Uint8Array(n);
-    let padAny = false;
+    const pairs = this.pileMode ? [] : null, rob = this.isRobot, crate = this.crateBody, table = this.floorGeom;
+    let padAny = false, crateF = 0;
     const con = d.contact;
     try {
       for (let k = 0, nc = d.ncon; k < nc; k++) {
         const c = con.get(k);
-        const b1 = m.geom_bodyid[c.geom1], b2 = m.geom_bodyid[c.geom2];
+        const g1 = c.geom1, g2 = c.geom2, b1 = m.geom_bodyid[g1], b2 = m.geom_bodyid[g2], ea = c.efc_address;
         c.delete();
+        if (ea >= 0 && ((rob[b1] && (b2 === crate || g2 === table)) || (rob[b2] && (b1 === crate || g1 === table)))) {
+          this.mj.mj_contactForce(m, d, k, this.forceBuf);
+          const f = Math.abs(this.forceBuf.GetView()[0]);
+          if (f > crateF) crateF = f;
+        }
+        if (pairs) {
+          const i = this.bodyPart[b1], j = this.bodyPart[b2];
+          if (i >= 0 && j >= 0 && i !== j) pairs.push(i, j);
+        }
         for (const [a, b] of [[b1, b2], [b2, b1]]) {
           const i = this.bodyPart[a];
           if (i < 0 || !this.active[i]) continue;
@@ -239,7 +406,18 @@ export class Cell {
     }
     const held = new Uint8Array(n);
     for (let i = 0; i < n; i++) held[i] = left[i] && right[i] ? 1 : 0;
-    return { held, touch, padAny };
+    let carried = null;
+    if (pairs) {
+      carried = Uint8Array.from(touch);
+      for (let grew = true; grew;) {
+        grew = false;
+        for (let k = 0; k < pairs.length; k += 2) {
+          const i = pairs[k], j = pairs[k + 1];
+          if (carried[i] !== carried[j]) { carried[i] = carried[j] = 1; grew = true; }
+        }
+      }
+    }
+    return { held, touch, padAny, crateF, carried };
   }
 
   gripClosed() {
@@ -250,7 +428,7 @@ export class Cell {
     const { n, d } = this;
     const z = new Float64Array(n), bottomZ = new Float64Array(n), speed = new Float64Array(n);
     const inside = new Uint8Array(n), floor = new Uint8Array(n);
-    const { held, touch, padAny } = this.contacts();
+    const { held, touch, padAny, crateF, carried } = this.contacts();
     const fb = this.cfg.rules.floor_below;
     let nHeld = 0;
     for (let i = 0; i < n; i++) {
@@ -265,7 +443,11 @@ export class Cell {
       nHeld += held[i];
     }
     const emptyClose = this.gripClosed() && nHeld === 0 && !padAny;
-    return { t, held, touch, bottomZ, z, speed, inside, floor, active: Uint8Array.from(this.active), emptyClose, giveUp };
+    const R = this.R, s3 = 3 * R.tcp_site, q = new Float64Array(6);
+    for (let k = 0; k < 6; k++) q[k] = d.qpos[R.arm_joints_qpos[k]];
+    const tcp = [d.site_xpos[s3], d.site_xpos[s3 + 1], d.site_xpos[s3 + 2]];
+    return { t, held, touch, bottomZ, z, speed, inside, floor, active: Uint8Array.from(this.active), emptyClose, giveUp,
+             tcp, q, crateF, carried, resets: this.resets || 0 };
   }
 
   proprio() {
@@ -288,6 +470,7 @@ export class Cell {
     const r = this.cfg.rules;
     return { target, liftZ: this.crate.rim + r.lift_clear, holdS: r.hold_s, liftDz: r.lift_dz,
              tryS: r.try_s, endOnMiss: r.end_on_miss, settleSpeed: r.settle_speed,
-             outSettleS: r.out_settle_s, lostS: r.lost_s };
+             outSettleS: r.out_settle_s, lostS: r.lost_s, mode: this.pileMode ? 'pile' : 'classic',
+             crateHitForce: Number.isFinite(r.crate_hit_force) ? r.crate_hit_force : CRATE_HIT_FORCE };
   }
 }
