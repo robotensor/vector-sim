@@ -8,9 +8,8 @@ bin-picking leaf.
 
 | path | content |
 |---|---|
-| `src/actions.js`, `src/cell.js`, `src/episode.js`, `src/hash.js`, `src/rules.js` | the pinned files (section 2) |
-| `src/ik.js`, `src/obs.js`, `src/driver.js`, `src/plan.js`, `src/replay.js` | IK, camera, closed-loop try, plan run, replay |
-| `src/picks.js` | several picks per pile scene (`PickRun`, `replayPicks`, `pickCount`) |
+| `src/actions.js`, `src/cell.js`, `src/episode.js`, `src/hash.js`, `src/obs.js`, `src/picks.js`, `src/plan.js`, `src/rules.js` | the pinned files (section 2); `picks.js` runs several picks per pile scene (`PickRun`, `replayPicks`, `pickCount`) |
+| `src/ik.js`, `src/driver.js`, `src/replay.js` | IK, closed-loop try, replay |
 | `src/node.js` | Node only: `mujoco()`, `bundleFiles(dir, scene)`, `inside(root, p)`, `PIN_FILES`, `simPin()` |
 | `src/bundle.js` | Node only: `MISSING`, `envDir()`, `pinnedVersion(dir)`, `findBundle()` (section 3) |
 | `src/index.js` | the exports of `@vector/sim` |
@@ -24,8 +23,8 @@ unchanged.
 
 ## 2. Pinned files and `simPin()`
 
-- `PIN_FILES` is `['actions.js', 'cell.js', 'episode.js', 'hash.js', 'rules.js']`. These five files are
-  byte-identical to the previous layout.
+- `PIN_FILES` is `['actions.js', 'cell.js', 'episode.js', 'hash.js', 'obs.js', 'picks.js', 'plan.js', 'rules.js']`:
+  every file whose code decides states, targets or verdicts.
 - `simPin()` returns `{ sim, code, mujoco, wasm }`:
   - `sim`: `version` of the package's `package.json` (`js/package.json`, three folders above `src/`);
   - `code`: sha256 over `name\0content\0` of each pinned file, in `PIN_FILES` order, names without folders;

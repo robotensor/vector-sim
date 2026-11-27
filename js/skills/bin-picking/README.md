@@ -187,7 +187,7 @@ flowchart LR
 ```
 
 `simPin()` (`node.js`) is `{sim, code, mujoco, wasm}`: the `version` of `js/package.json`, the sha256 of
-`actions.js, cell.js, episode.js, hash.js, rules.js` (`name\0content\0` each), the MuJoCo version and the sha256 of
+`actions.js, cell.js, episode.js, hash.js, obs.js, picks.js, plan.js, rules.js` (`name\0content\0` each), the MuJoCo version and the sha256 of
 the `mujoco.wasm` it loads. Two runtimes with the same pin step the same rows to the same states; the console
 refuses to play on another pin.
 

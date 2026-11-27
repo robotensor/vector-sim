@@ -49,7 +49,7 @@ test('every bin exists, is executable and starts with #!/usr/bin/env node', () =
 
 test('simPin() names this package and the pinned files', async () => {
   const { simPin, PIN_FILES } = await import('@vector/sim/node.js');
-  assert.deepEqual(PIN_FILES, ['actions.js', 'cell.js', 'episode.js', 'hash.js', 'rules.js']);
+  assert.deepEqual(PIN_FILES, ['actions.js', 'cell.js', 'episode.js', 'hash.js', 'obs.js', 'picks.js', 'plan.js', 'rules.js']);
   const h = crypto.createHash('sha256');
   for (const f of PIN_FILES) h.update(`${f}\0`).update(fs.readFileSync(path.join(SRC, f))).update('\0');
   const pin = simPin();

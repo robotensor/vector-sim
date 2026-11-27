@@ -31,7 +31,7 @@ export function inside(root, p) {
   return full;
 }
 
-export const PIN_FILES = ['actions.js', 'cell.js', 'episode.js', 'hash.js', 'rules.js'];
+export const PIN_FILES = ['actions.js', 'cell.js', 'episode.js', 'hash.js', 'obs.js', 'picks.js', 'plan.js', 'rules.js'];
 
 let _pin = null;
 export function simPin() {
