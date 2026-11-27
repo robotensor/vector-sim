@@ -86,7 +86,7 @@ reached as fast as the torque allows; interpolate between poses yourself. An emp
 | call | returns / does |
 |---|---|
 | `Episode.restoreCheckpoint(cell, checkpoint)` | puts `cell` back at `start.checkpoint` (the settled scene) and returns an `Episode` ready for a try; call it before each plan you test |
-| `ep.beginTry(target)`, `ep.stepTry(row)` | start a try on part `target`, then one tick; `stepTry` returns `null` while the try runs, then the verdict |
+| `ep.beginTry(target, targetClass)`, `ep.stepTry(row)` | start a try on part `target` (`targetClass`: the scene's `target_class`, pile scenes), then one tick; `stepTry` returns `null` while the try runs, then the verdict |
 | `ep.checkpoint()`, `ep.log(sceneId)` | the checkpoint after the last finished unit; the full episode log (see vector-env) |
 | `CTRL` | 7, the length of a row |
 
@@ -99,10 +99,15 @@ reached as fast as the torque allows; interpolate between poses yourself. An emp
 | `opts` | `iters` 30, `damping` 0.02, `maxStep` 0.3 (rad per iteration), `rotWeight` 0.3, `tol` 1e-4 (m; stops when `err < tol` and `rot < 10·tol`) |
 | `ik.fk(q)` | `{ pos, mat }` of the tcp for joint angles `q` |
 | `downMat(yaw = 0)` | the tcp rotation pointing the gripper straight down (tool z = world −z), turned by `yaw` (rad) about world z: tool x is `(cos yaw, sin yaw, 0)`, the axis the fingers close along |
-| `runPlan(cell, start, rows, { limit })` | restores `start.checkpoint`, runs a try on `start.target` with `rows` (`number[][]`, flat array, `Float64Array` or base64), then holds the last row until the verdict. Returns `{ outcome, t, part, detail, tick, hash, n, held, ctrl }` (below). Throws on a malformed plan or more rows than `limit` (default `maxRows(cell)`) |
+| `runPlan(cell, start, rows, { limit })` | restores `start.checkpoint`, runs a try on `start.target` with `rows` (`number[][]`, flat array, `Float64Array` or base64), then holds the last row until the verdict. Returns `{ outcome, t, part, detail, tick, hash, n, held, ctrl }` and the try metrics (below). Throws on a malformed plan or more rows than `limit` (default `maxRows(cell)`) |
 | `maxRows(cell)` | rows in a try: `ceil(rules.try_s / tick_s)` (300 for 15 s) |
 | `planRows(rows)`, `planHash(rows)` | the rows as a checked flat `Float64Array`; its fnv64 |
-| `chooseTarget(cell, seed, { minPx = 100 })` | the target vector-env would draw: a part in the bin with at least `minPx` camera pixels, picked by `seed`; `null` when none |
+| `chooseTarget(cell, seed, { minPx = 100 })` | the target vector-env would draw: a part in the bin with at least `minPx` camera pixels, picked by `seed` (in a pile scene `pickTarget`'s); `null` when none |
+| `pickTarget(cell, seed)` | `{ target, target_class, counts }`: in a pile scene a class drawn by `rules.target.shares`, then a part of it (below); elsewhere `chooseTarget` with class `null` |
+| `classify(cell)` | the target class of every part of a pile scene (`cls`, `counts`) and the measures behind it (`vis`, `depth`, `above`, `pressed`, `camPx`) |
+| `new PickRun(ep, { target, target_class, seed })` | a pile scene of `pickCount(cell)` picks (`rules.picks`, 10): `run.start()`, then `run.step(row)` per tick returns `null`, or at a pick's verdict `{ pick, verdict, record, next }` (`next` `{ pick, target, target_class }` or `null` when the scene is over); `run.picks` holds one record per pick, `run.totals()` the sums |
+| `replayPicks(ep, start, rows, { hold, every })` | replays a whole pile scene's rows from its checkpoint: a pick ends at its verdict and the next row starts the next pick |
+| `pickSeed(seed, k)` | the seed pick `k`'s target is drawn with (`seed` itself for pick 0) |
 
 `runPlan` returns the verdict and where it fell:
 
@@ -115,6 +120,10 @@ reached as fast as the torque allows; interpolate between poses yourself. An emp
 | `n` | rows of the plan run before the verdict |
 | `held` | ticks the last row was held after the plan ran out |
 | `ctrl` | the rows run, base64 of float64 |
+| `outs`, `out_parts` | how many parts, and which, ended outside the bin (below) |
+| `tcp_path_m`, `joint_path_rad` | the tcp's path length (m); the sum of \|Δq\| over the 6 arm joints (rad) |
+| `crate_hits` | ticks in which the robot pushes on the bin or the table harder than `rules.crate_hit_force` (75 N) |
+| `target_class` | `top`, `blocked`, `buried` or `hidden` in a pile scene, else `null` |
 
 Because the expert's cell and the harness run the same code on the same `.wasm`, a plan `runPlan` scores is what the
 harness scores when the same rows are sent, as long as both run the same round tag (section [Rounds](#rounds)).
@@ -132,6 +141,27 @@ the outcomes. With the default rules:
 | `slipped` | a part lifted by `lift_dz` (0.03 m) is lost from the pads for `lost_s` (0.2 s), or falls out of the bin |
 | `missed` | the try ran out after closing on nothing and never holding a part, or the expert gave up |
 | `timed_out` | `try_s` passed (the start message's `limits.time_limit_s`, 15 s) without another verdict |
+
+Pile scenes (`meta.config.rules.mode` is `pile`; a pile of 50–150 parts, one of them the target):
+
+- `success`: the target held by both pads, its lowest point at least `lift_clear` above the rim, no other part of the
+  bin up there, for `hold_s`. Only `success`, the time limit or a give-up end the try. A dropped target can be
+  picked again; holding, pushing or lifting other parts inside the bin is no verdict.
+- An *out* is a part of the bin that is outside it and not touching the gripper (directly or through other parts),
+  and either on the floor or at rest (slower than `settle_speed`) for `out_settle_s`. Outs stay outs and never end
+  the try. When the try ends, every part outside the bin that is not held counts as an out too.
+- At the time limit or a give-up the outcome is `knocked_out` if the target is an out, else `slipped` if the target
+  was lifted by `lift_dz` and is not held, else `missed` if the grip closed on nothing and never held a part, else
+  `timed_out`. There is no `wrong_part`.
+- A pile scene is `rules.picks` (10) picks in a row in the same bin, each a try with its own `try_s`. After a pick,
+  its outs and, when it succeeded, its target are taken away; a target it failed on stays, and the robot goes on
+  from where it is. Pick `k`'s target is `pickTarget(cell, pickSeed(seed, k), { exclude })` on the state at that
+  moment, never a part an earlier pick failed on. The scene ends after the last pick or when no target is left.
+- `physics_error` ends a pick (and the scene) when the simulation diverged and MuJoCo reset it.
+- Target classes, from the pile seen straight from above (`classify`, on the parts' convex hulls): `top` nothing lies over the part or
+  presses on it from higher up; `blocked` at least 60 % of its outline is visible from above but parts lie on or
+  press against it; `buried` 10–60 % of its outline is visible; `hidden` the camera sees none of it and one layer of
+  parts covers it, each with nothing on top. Targets are never deeper than one layer.
 
 ### Action logs
 
@@ -165,7 +195,7 @@ refuses to play on another pin.
 
 | export | use |
 |---|---|
-| `Camera(cell)`, `observe(cell, camera)` | the depth camera: `camera.render()` returns `{ width, height, depth, seg }`, depth a `Uint16Array` in units of `meta.camera.depth_unit` (0.1 mm), seg a `Uint8Array` (part `i` is `i + 1`, 254 the bin, 255 the robot, 0 the rest); `observe` adds `q` and `grip` |
+| `Camera(cell)`, `observe(cell, camera)` | the depth camera: `camera.render()` returns `{ width, height, depth, seg }`, depth a `Uint16Array` in units of `meta.camera.depth_unit` (0.1 mm), seg a `Uint8Array` (part `i` is `i + 1`, 254 the bin, 255 the robot, 0 the rest); in a pile scene (or with more than 253 parts) seg is a `Uint16Array` with 65534 the bin and 65535 the robot, and the image has `seg_dtype: "uint16"`; `observe` adds `q` and `grip` |
 | `obsBytes`, `obsHash`, `obsWire` | the observation as hashed and as sent on the wire |
 | `runTry(ep, camera, act)` | a closed-loop try driven by an `act(obs, k)` callback (the browser and the harness use it) |
 | `replay(cell, log)`, `replayUnit(cell, …)` | re-simulate an episode log, or one unit of it, and check every hash |

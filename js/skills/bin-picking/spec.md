@@ -10,6 +10,7 @@ bin-picking leaf.
 |---|---|
 | `src/actions.js`, `src/cell.js`, `src/episode.js`, `src/hash.js`, `src/rules.js` | the pinned files (section 2) |
 | `src/ik.js`, `src/obs.js`, `src/driver.js`, `src/plan.js`, `src/replay.js` | IK, camera, closed-loop try, plan run, replay |
+| `src/picks.js` | several picks per pile scene (`PickRun`, `replayPicks`, `pickCount`) |
 | `src/node.js` | Node only: `mujoco()`, `bundleFiles(dir, scene)`, `inside(root, p)`, `PIN_FILES`, `simPin()` |
 | `src/bundle.js` | Node only: `MISSING`, `envDir()`, `pinnedVersion(dir)`, `findBundle()` (section 3) |
 | `src/index.js` | the exports of `@vector/sim` |
