@@ -9,7 +9,7 @@ const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PKG = JSON.parse(fs.readFileSync(path.join(PKG_DIR, 'package.json'), 'utf8'));
 const SRC = path.join(PKG_DIR, 'skills', 'bin-picking', 'src');
 const SRC_FILES = ['actions.js', 'bundle.js', 'cell.js', 'driver.js', 'episode.js', 'hash.js', 'ik.js', 'index.js', 'node.js',
-                   'obs.js', 'plan.js', 'replay.js', 'rules.js'];
+                   'obs.js', 'picks.js', 'plan.js', 'replay.js', 'rules.js'];
 
 test('the package is @vector/sim', () => {
   assert.equal(PKG.name, '@vector/sim');
