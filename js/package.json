@@ -1,6 +1,6 @@
 {
   "name": "@vector/sim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The simulator of each Vector skill. Browsers, the environment and experts run the same code.",
   "type": "module",
   "engines": {

@@ -38,13 +38,14 @@ A dependent installs the package from its folder: `"@vector/sim": "file:<path to
 
 ## Rounds
 
-What miners run for a round is the git tag `<leaf-id>-r<n>` in vector-miner, vector-env and vector-sim. Round 1 of
-`bin-picking-expert` is `bin-picking-expert-r1`.
+What miners run for a round is the git tag `<leaf-id>-r<n>` in vector-miner, vector-env and vector-sim. Round 2 of
+`bin-picking-expert` is `bin-picking-expert-r2`. Round 1 was `bin-picking-expert-r1` of vector-miner; it installed
+vector-env and vector-sim at `v0.1.0`.
 
 An expert that plans with vector-sim builds against the tag of its round, so the same rows give the same states:
 
 ```bash
-git clone --branch bin-picking-expert-r1 https://github.com/robotensor/vector-sim
+git clone --branch bin-picking-expert-r2 https://github.com/robotensor/vector-sim
 ```
 
 ## Setup and tests

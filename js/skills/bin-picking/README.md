@@ -166,6 +166,11 @@ Pile scenes (`meta.config.rules.mode` is `pile`; a pile of 50–150 parts, one o
   presses on it from higher up; `blocked` at least 60 % of its outline is visible from above but parts lie on or
   press against it; `buried` 10–60 % of its outline is visible; `hidden` the camera sees none of it and one or two
   layers of parts cover it (`rules.target.hidden_max_depth`, 2 for new scenes).
+- The pile is filled by rain (`meta.fill`): batches of parts drop into the bin until the pile reaches `level` of the
+  bin depth. With `meta.fill.bury`, the bury parts stay out of the rain; then they are laid over one `top` part until
+  it classifies `hidden`, retried up to `bury.tries` times from a snapshot of the pile. With `bury.undo_failed`, a bury
+  whose last try fails goes back to that snapshot: its parts stay parked out of the bin. Without it, the last try's
+  parts stay on the pile.
 
 ### Action logs
 
@@ -211,8 +216,9 @@ in browsers.
 
 ## Rounds
 
-What miners run for a round is the git tag `<leaf-id>-r<n>` in vector-miner, vector-env and vector-sim (round 1 of
-`bin-picking-expert` is `bin-picking-expert-r1`). An expert that plans with vector-sim builds against the tag of its
+What miners run for a round is the git tag `<leaf-id>-r<n>` in vector-miner, vector-env and vector-sim (round 2 of
+`bin-picking-expert` is `bin-picking-expert-r2`; round 1 was `bin-picking-expert-r1` of vector-miner, which installed
+vector-env and vector-sim at `v0.1.0`). An expert that plans with vector-sim builds against the tag of its
 round (the vector-miner example's Dockerfile does, through `VECTOR_SIM_REF`), so the same rows give the same states.
 
 ## Setup and tests
