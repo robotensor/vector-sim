@@ -61,7 +61,7 @@ export function replayUnit(cell, { checkpoint = null, index, segments, chunks = 
     if (!ctrl) return fail('ctrl size');
     const calls = [...(S.calls || [])].sort((a, b) => a.tick - b.tick);
     if (!calls.length || calls[0].tick !== 0) return fail('a try starts with a policy call');
-    ep.beginTry(target);
+    ep.beginTry(target, (S.verdict && S.verdict.target_class) ?? null);
     let ci = 0, cur = null;
     for (let j = 0; j < S.n; j++) {
       let giveUp = false;

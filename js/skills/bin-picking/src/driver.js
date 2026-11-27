@@ -1,4 +1,4 @@
-import { observe } from './obs.js';
+import { observe, segBytes } from './obs.js';
 
 export async function runTry(ep, cam, act, { onTick = null, pace = null, stop = null } = {}) {
   const cell = ep.cell;
@@ -28,6 +28,8 @@ export async function runTry(ep, cam, act, { onTick = null, pace = null, stop = 
 }
 
 export function obsWire(o, b64) {
-  return { width: o.width, height: o.height, q: o.q, grip: o.grip,
-           depth: b64(new Uint8Array(o.depth.buffer, o.depth.byteOffset, o.depth.byteLength)), seg: b64(o.seg) };
+  const w = { width: o.width, height: o.height, q: o.q, grip: o.grip,
+              depth: b64(new Uint8Array(o.depth.buffer, o.depth.byteOffset, o.depth.byteLength)), seg: b64(segBytes(o.seg)) };
+  if (o.seg instanceof Uint16Array) w.seg_dtype = 'uint16';
+  return w;
 }

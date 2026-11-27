@@ -102,7 +102,7 @@ export function replayRows(cell, start, rows, { limit = null, every = 1, hold = 
   const flat = flatRows(rows), n = flat.length / CTRL;
   if (limit !== null && n > limit) throw new Error(`the log has ${n} rows, more than the budget of ${limit}`);
   const ep = Episode.restoreCheckpoint(cell, start.checkpoint);
-  ep.beginTry(start.target);
+  ep.beginTry(start.target, start.target_class ?? null);
   const marks = [];
   let v = null, k = 0, row = null;
   for (; k < n && !v; k++) {
@@ -116,7 +116,8 @@ export function replayRows(cell, start, rows, { limit = null, every = 1, hold = 
     while (!v) { v = ep.stepTry(row); held++; }
   }
   const tick = v ? ep.lastTry.verdict.tick : k;
+  const mon = v ? ep.lastTry.mon : ep.cur.mon;
   return { outcome: v ? v.outcome : null, part: v ? v.part : null, detail: v ? v.detail : null,
            tick, t: Math.round(1e6 * tick * cell.meta.tick_s) / 1e6, rows: k, extra: n - k, held,
-           hash: cell.hash(), marks };
+           hash: cell.hash(), marks, ...mon.metrics() };
 }
