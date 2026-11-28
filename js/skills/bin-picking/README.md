@@ -149,11 +149,12 @@ Pile scenes (`meta.config.rules.mode` is `pile`; a pile of 50–150 parts, one o
   bin up there, for `hold_s`. Only `success`, `multi_pick`, the time limit or a give-up end the try. A dropped target
   can be picked again; holding, pushing or lifting one other part at a time inside the bin is no verdict.
 - `multi_pick`: two or more parts that were in the bin when the pick began, the target or not, are above the lift
-  line at the same tick. The pick ends as a failure (pick score 0): only one part may be picked at a time. The parts
-  above the line leave with the gripper and are not outs; the outs are counted at that moment, as at a `success`.
+  line at the same tick. The pick ends as a failure (pick score 0, -1 with an out): only one part may be picked at
+  a time. The parts above the line leave with the gripper and are not outs; the outs are counted at that moment, as at a `success`.
 - An *out* is a part of the bin that is outside it and not touching the gripper (directly or through other parts),
   and either on the floor or at rest (slower than `settle_speed`) for `out_settle_s`. Outs stay outs and never end
-  the try. When the try ends, every part outside the bin that is not held counts as an out too.
+  the try. When the try ends, every part outside the bin that is not held counts as an out too. Each pick's outs are
+  its own (`outs`, `out_parts` per pick record); a pick with at least one out scores -1 in vector-env's rules.
 - At the time limit or a give-up the outcome is `knocked_out` if the target is an out, else `slipped` if the target
   was lifted by `lift_dz` and is not held, else `missed` if the grip closed on nothing and never held a part, else
   `timed_out`. There is no `wrong_part`.
